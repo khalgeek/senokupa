@@ -9,17 +9,19 @@ import sys
 import argparse
 import pydbus
 import logging
+import logging.handlers
 import subprocess
-import shlex
 import psutil
 import os
 import configparser
+import daemonize
 from gi.repository import GLib
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.DEBUG)
 
-config_file = os.path.expanduser('~/.config/senokuparc')
+PID_FILE = '/tmp/senokupa.pid'
+CONFIG_FILE = os.path.expanduser('~/.config/senokuparc')
 
 command = None
 process = None
@@ -27,14 +29,14 @@ process = None
 
 def terminate():
     if process is not None:
-        logger.debug('Stopping process {0}'.format(process.pid))
+        logger.info('Stopping process {0}'.format(process.pid))
         psutil.Process(process.pid).terminate()
 
 
 def handler(screensaver_active):
     global command
     global process
-    logger.debug('Handler reached! Active={0}'.format(screensaver_active))
+    logger.info('Handler reached! Active={0}'.format(screensaver_active))
 
     if screensaver_active:
         process = subprocess.Popen(command, shell=True)
@@ -47,40 +49,23 @@ def handler(screensaver_active):
 def setup_logging(daemonize):
     formatter = logging.Formatter('%(asctime)s [%(threadName)-12.12s] [%(levelname)-8.8s]  %(message)s')
 
+    handler = None
     if daemonize:
-        pass
+        handler = logging.handlers.SysLogHandler()
     else:
-        consoleHandler = logging.StreamHandler(sys.stdout)
-        consoleHandler.setFormatter(formatter)
-        consoleHandler.setLevel(logging.DEBUG)
+        handler = logging.StreamHandler(sys.stdout)
+        handler.setFormatter(formatter)
+        handler.setLevel(logging.DEBUG)
 
-        logger.addHandler(consoleHandler)
+    logger.addHandler(handler)
     
 
-def main():
-    global command
-
-    parser = argparse.ArgumentParser(description='Runs commands when the screensaver activates')
-    parser.add_argument('--daemonize', '-d', action='store_true')
-    args = parser.parse_args()
-
-    setup_logging(args.daemonize)
-    logger.info('Parsing config at {0}'.format(config_file))
-
-    config = configparser.SafeConfigParser()
-    #with open(config_file, 'r') as configfile:
-    config.read(config_file)
-
-    logger.debug('{0}'.format(config.sections()))
-    command = config.get('Main', 'command')
-
+def run_loop():
     logger.debug('Setup DBus')
     bus = pydbus.SessionBus()
     adapter = bus.get('org.freedesktop.ScreenSaver', '/org/freedesktop/ScreenSaver')
-    #logger.debug('Active = {0}'.format(adapter.GetActive()))
     adapter.ActiveChanged.connect(handler)
-
-
+    
     loop = GLib.MainLoop()
 
     try:
@@ -89,6 +74,27 @@ def main():
     except KeyboardInterrupt:
         terminate()
         loop.quit()
+
+
+def main():
+    global command
+
+    parser = argparse.ArgumentParser(description='Runs commands when the screensaver activates')
+    parser.add_argument('--daemonize', '-d', action='store_true', default=False)
+    args = parser.parse_args()
+
+    setup_logging(args.daemonize)
+    logger.info('Parsing config at {0}'.format(CONFIG_FILE))
+
+    config = configparser.SafeConfigParser()
+    config.read(CONFIG_FILE)
+
+    logger.debug('{0}'.format(config.sections()))
+    command = config.get('Main', 'command')
+
+    dem = daemonize.Daemonize(app='senokupa', pid=PID_FILE, action=run_loop,
+                              foreground=not args.daemonize, logger=logger)
+    dem.start()
 
     sys.exit(0)
 

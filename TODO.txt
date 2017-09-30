@@ -1,0 +1,6 @@
+TODO items:
+
+- [ ] Respect the XDG_CONFIG_HOME environment variable
+- [ ] Startup as a daemon
+- [ ] Syslogging
+- [ ] Quiet option
